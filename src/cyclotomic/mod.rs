@@ -206,6 +206,14 @@ impl Poly {
 
     // --- Compression ---
 
+    pub fn compress_4(&self, out: &mut [u8; 128]) {
+        Self::compress::<4, 128>(self, out);
+    }
+
+    pub fn decompress_4(bytes: &[u8; 128], out: &mut Poly) {
+        Self::decompress::<4, 128>(bytes, out);
+    }
+
     pub fn compress<const D: u8, const OUT: usize>(&self, out: &mut [u8; OUT]) {
         debug_assert_eq!(OUT, 256 * D as usize / 8);
 
