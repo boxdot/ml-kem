@@ -2,11 +2,11 @@
 
 use std::{
     fmt,
-    ops::{Add, Mul, Neg, Sub},
+    ops::{Add, AddAssign, Mul, Neg, Sub},
 };
 
 /// Prime modulus
-const Q: i16 = 3329;
+pub const Q: i16 = 3329;
 
 /// -Q^-1 mod R
 const Q_INV: i16 = -3327;
@@ -116,6 +116,12 @@ impl Sub for Zq {
 
     fn sub(self, rhs: Self) -> Self::Output {
         self.sub(rhs)
+    }
+}
+
+impl AddAssign for Zq {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self.add(rhs);
     }
 }
 

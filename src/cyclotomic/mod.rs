@@ -16,11 +16,11 @@
 //!
 //! Since 17^128 = -1 mod Q => 17 is a (primitive) 256th root of unity mod Q. We take it as the
 //! generator of the group of 256th roots of unity mod Q.
-//!
-//!
-//! Number theoretic transform (NTT)
 
-use crate::{cyclotomic::base::BASE_ZETAS, integer::Zq};
+use crate::{
+    cyclotomic::base::BASE_ZETAS,
+    integer::{Q, Zq},
+};
 
 use base::ZETAS_NTT;
 
@@ -31,13 +31,25 @@ pub struct Poly {
     /// (2i, 2i+1) -> f_i(X) = a[2i] + a[2i+1] * X (mod X^2 - zeta_i)
     ///
     /// with zeta_i = BASE_ZETAS[i].
-    coeffs: [Zq; 256],
+    pub(crate) coeffs: [Zq; 256],
 }
 
 impl Poly {
     pub fn zero() -> Self {
         Self {
             coeffs: [Zq::zero(); 256],
+        }
+    }
+
+    pub fn add_assign(&mut self, rhs: &Self) {
+        for i in 0..256 {
+            self.coeffs[i] += rhs.coeffs[i];
+        }
+    }
+
+    pub fn sub_assign(&mut self, rhs: &Self) {
+        for i in 0..256 {
+            self.coeffs[i] = self.coeffs[i] - rhs.coeffs[i];
         }
     }
 
@@ -56,7 +68,7 @@ impl Poly {
                     // a[j + len] = a[j] - t;
                     self.coeffs[j + len] = self.coeffs[j] - t;
                     // a[j] = a[j] + t;
-                    self.coeffs[j] = self.coeffs[j] + t;
+                    self.coeffs[j] += t;
                 }
 
                 start += len * 2;
@@ -92,7 +104,7 @@ impl Poly {
         }
     }
 
-    pub fn pointwise_mul(&mut self, rhs: &Self) -> Self {
+    pub fn pointwise_mul(&self, rhs: &Self) -> Self {
         let mut res = Poly::zero();
         for (i, &zeta) in BASE_ZETAS.iter().enumerate() {
             let a0 = self.coeffs[2 * i];
@@ -104,10 +116,112 @@ impl Poly {
         }
         res
     }
+
+    pub fn mul_add_assign(&mut self, a: &Self, b: &Self) {
+        for (i, &zeta) in BASE_ZETAS.iter().enumerate() {
+            let a0 = a.coeffs[2 * i];
+            let a1 = a.coeffs[2 * i + 1];
+            let b0 = b.coeffs[2 * i];
+            let b1 = b.coeffs[2 * i + 1];
+            self.coeffs[2 * i] += a0 * b0 + zeta * a1 * b1;
+            self.coeffs[2 * i + 1] += a0 * b1 + a1 * b0;
+        }
+    }
+
+    // --- Serialization ---
+
+    pub fn encode(&self, out: &mut [u8; 384]) {
+        for i in 0..128 {
+            let a = self.coeffs[2 * i].to_int();
+            let b = self.coeffs[2 * i + 1].to_int();
+            debug_assert!(a < 3329 && b < 3329);
+            let a = a as u16;
+            let b = b as u16;
+            out[3 * i] = (a & 0xFF) as u8; // low 8 bits of a
+            out[3 * i + 1] = ((a >> 8) | (b << 4)) as u8; // high 4 bits of a, low 4 bits of b
+            out[3 * i + 2] = (b >> 4) as u8; // high 4 bits of b
+        }
+    }
+
+    pub fn decode(bytes: &[u8; 384], out: &mut Poly) {
+        for i in 0..128 {
+            let a = bytes[3 * i] as u16;
+            let b = bytes[3 * i + 1] as u16;
+            let c = bytes[3 * i + 2] as u16;
+            let a = a | ((b & 0xF) << 8);
+            let b = (b >> 4) | (c << 4);
+            out.coeffs[2 * i] = Zq::from_int(a as i16);
+            out.coeffs[2 * i + 1] = Zq::from_int(b as i16);
+        }
+    }
+
+    // --- Compression ---
+
+    pub fn compress<const D: u8, const OUT: usize>(&self, out: &mut [u8; OUT]) {
+        debug_assert_eq!(OUT, 256 * D as usize / 8);
+
+        let q = Q as u32;
+
+        let mut buf: u32 = 0; // bits accumulator
+        let mut bits: u8 = 0; // number of valid bits in buf
+        let mut out_i = 0; // current byte index
+
+        for i in 0..256 {
+            // Scale from Zq to Z_{2^D}
+            // round(x * 2^D / q) = (x * 2^D + q/2) / q
+            let x = self.coeffs[i].to_int() as u32;
+            let compressed = (((x << D) + q / 2) / q) & ((1 << D) - 1);
+
+            // Pack D bits into buf
+            buf |= compressed << bits;
+            bits += D;
+
+            // Flush full bytes
+            while bits >= 8 {
+                out[out_i] = buf as u8;
+                buf >>= 8;
+                bits -= 8;
+                out_i += 1;
+            }
+        }
+
+        debug_assert_eq!(bits, 0);
+    }
+
+    pub fn decompress<const D: u8, const OUT: usize>(bytes: &[u8; OUT], out: &mut Poly) {
+        debug_assert_eq!(OUT, 256 * D as usize / 8);
+
+        let q = Q as u32;
+
+        let mut buf: u32 = 0; // bits accumulator
+        let mut bits: u8 = 0; // number of valid bits in buf
+        let mut in_i = 0; // current byte index
+
+        let mask: u32 = (1 << D) - 1;
+
+        for i in 0..256 {
+            // Extact D bits from buf
+            while bits < D {
+                buf |= (bytes[in_i] as u32) << bits;
+                bits += 8;
+                in_i += 1;
+            }
+            let y = buf & mask;
+            buf >>= D;
+            bits -= D;
+
+            // Scale from Z_{2^D} to Zq
+            // round(y * q / 2^D) = (y * q - 2^(D-1)) / 2^D
+            let x = (y * q + (1 << (D - 1))) >> D;
+            out.coeffs[i] = Zq::from_int(x as i16);
+        }
+
+        debug_assert_eq!(bits, 0);
+    }
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
 
@@ -155,23 +269,6 @@ mod test {
 
         (0..256).all(|i| a.coeffs[i] + b.coeffs[i] == sum.coeffs[i])
     }
-
-    // #[quickcheck]
-    // fn test_ntt_intt_roundtrip(mut p: Poly) {
-    //     let original = p.clone();
-    //
-    //     p.ntt();
-    //     p.intt();
-    //
-    //     for i in 0..256 {
-    //         assert_eq!(
-    //             p.coeffs[i].to_int(),
-    //             original.coeffs[i].to_int(),
-    //             "Mismatch at coefficient {}",
-    //             i
-    //         );
-    //     }
-    // }
 
     #[test]
     fn test_ntt_intt_roundtrip() {
@@ -226,5 +323,128 @@ mod test {
         for i in 3..256 {
             assert_eq!(c.coeffs[i].to_int(), 0, "Index {} should be 0", i);
         }
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        let mut p = Poly::zero();
+        // Use known values that exercise all 12 bits
+        p.coeffs[0] = Zq::from_int(0xABC); // 2748
+        p.coeffs[1] = Zq::from_int(0x123); // 291
+        p.coeffs[2] = Zq::from_int(0);
+        p.coeffs[3] = Zq::from_int(3328); // max value
+
+        let mut out = [0u8; 384];
+        p.encode(&mut out);
+
+        let mut decoded = Poly::zero();
+        Poly::decode(&out, &mut decoded);
+
+        for i in 0..256 {
+            assert_eq!(
+                p.coeffs[i].to_int(),
+                decoded.coeffs[i].to_int(),
+                "Mismatch at coefficient {}",
+                i
+            );
+        }
+    }
+
+    #[quickcheck]
+    fn test_encode_decode_roundtrip_qc(p: Poly) -> bool {
+        let mut out = [0u8; 384];
+        p.encode(&mut out);
+
+        let mut decoded = Poly::zero();
+        Poly::decode(&out, &mut decoded);
+
+        (0..256).all(|i| p.coeffs[i].to_int() == decoded.coeffs[i].to_int())
+    }
+
+    // Maximum allowable rounding error per coefficient for each D
+    // bound = round(q / 2^(D+1))
+    // D=10: round(3329 / 2048) = 2
+    // D=4:  round(3329 / 32)   = 104
+    pub(crate) fn max_error(d: u8) -> i16 {
+        let q = 3329i32;
+        ((q + (1 << d)) / (1 << (d + 1))) as i16
+    }
+
+    fn check_compress_error<const D: u8, const OUT: usize>(p: &Poly) {
+        let mut compressed = [0u8; OUT];
+        p.compress::<D, OUT>(&mut compressed);
+
+        let mut decompressed = Poly::zero();
+        Poly::decompress::<D, OUT>(&compressed, &mut decompressed);
+
+        let bound = max_error(D);
+        for i in 0..256 {
+            let orig = p.coeffs[i].to_int();
+            let recv = decompressed.coeffs[i].to_int();
+            // error is computed mod q on the circle
+            let err = (orig - recv).abs().min(3329 - (orig - recv).abs());
+            assert!(
+                err <= bound,
+                "coeff {i}: orig={orig} recv={recv} err={err} bound={bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_compress_10_zero() {
+        check_compress_error::<10, 320>(&Poly::zero());
+    }
+
+    #[test]
+    fn test_compress_4_zero() {
+        check_compress_error::<4, 128>(&Poly::zero());
+    }
+
+    #[test]
+    fn test_compress_10_known() {
+        let mut p = Poly::zero();
+        p.coeffs[0] = Zq::from_int(0);
+        p.coeffs[1] = Zq::from_int(1664); // q/2, maps to 2^(D-1)
+        p.coeffs[2] = Zq::from_int(3328); // q-1, maps back to 0
+        check_compress_error::<10, 320>(&p);
+    }
+
+    #[test]
+    fn test_compress_4_known() {
+        let mut p = Poly::zero();
+        p.coeffs[0] = Zq::from_int(0);
+        p.coeffs[1] = Zq::from_int(1664);
+        p.coeffs[2] = Zq::from_int(3328);
+        check_compress_error::<4, 128>(&p);
+    }
+
+    #[quickcheck]
+    fn test_compress_10_qc(p: Poly) -> bool {
+        let mut compressed = [0u8; 320];
+        p.compress::<10, 320>(&mut compressed);
+        let mut decompressed = Poly::zero();
+        Poly::decompress::<10, 320>(&compressed, &mut decompressed);
+        let bound = max_error(10);
+        (0..256).all(|i| {
+            let orig = p.coeffs[i].to_int();
+            let recv = decompressed.coeffs[i].to_int();
+            let err = (orig - recv).abs().min(3329 - (orig - recv).abs());
+            err <= bound
+        })
+    }
+
+    #[quickcheck]
+    fn test_compress_4_qc(p: Poly) -> bool {
+        let mut compressed = [0u8; 128];
+        p.compress::<4, 128>(&mut compressed);
+        let mut decompressed = Poly::zero();
+        Poly::decompress::<4, 128>(&compressed, &mut decompressed);
+        let bound = max_error(4);
+        (0..256).all(|i| {
+            let orig = p.coeffs[i].to_int();
+            let recv = decompressed.coeffs[i].to_int();
+            let err = (orig - recv).abs().min(3329 - (orig - recv).abs());
+            err <= bound
+        })
     }
 }
