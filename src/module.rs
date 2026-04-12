@@ -1,5 +1,6 @@
 use crate::cyclotomic::Poly;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vec3([Poly; 3]);
 
 impl Vec3 {
@@ -9,6 +10,14 @@ impl Vec3 {
 
     pub fn from_polys(polys: [Poly; 3]) -> Self {
         Self(polys)
+    }
+
+    pub fn get(&self, i: usize) -> &Poly {
+        &self.0[i]
+    }
+
+    pub fn get_mut(&mut self, i: usize) -> &mut Poly {
+        &mut self.0[i]
     }
 
     /// Sample each component via CBD(η = 2)
@@ -44,7 +53,6 @@ impl Vec3 {
         for i in 0..3 {
             res.mul_add_assign(&self.0[i], &rhs.0[i]);
         }
-        res.intt();
         res
     }
 
@@ -97,11 +105,22 @@ impl Vec3 {
 
 #[cfg(test)]
 mod test {
+    use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
 
     use crate::{cyclotomic::test::max_error, integer::Zq};
 
     use super::*;
+
+    impl Arbitrary for Vec3 {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let mut v = Vec3::zero();
+            for i in 0..3 {
+                v.0[i] = Arbitrary::arbitrary(g);
+            }
+            v
+        }
+    }
 
     #[test]
     fn test_encode_decode_roundtrip() {

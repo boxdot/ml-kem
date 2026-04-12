@@ -73,9 +73,7 @@ impl Poly {
 
         let mut p = Poly::zero();
         // Each byte gives 2 coefficients (4 bits each)
-        for i in 0..128 {
-            let byte = prf_output[i];
-
+        for (i, byte) in prf_output.into_iter().enumerate() {
             let a0 = byte & 1;
             let a1 = byte >> 1 & 1;
             let b0 = byte >> 2 & 1;
