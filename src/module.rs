@@ -11,6 +11,20 @@ impl Vec3 {
         Self(polys)
     }
 
+    /// Sample each component via CBD(η = 2)
+    ///
+    /// Components use the nonces [nonce_start, nonce_start + 1, nonce_start + 2].
+    ///
+    /// See [`Poly::sample_cbd`].
+    pub fn sample_cbd(seed: &[u8; 32], nonce_start: u8) -> Self {
+        let polys = [
+            Poly::sample_cbd(seed, nonce_start),
+            Poly::sample_cbd(seed, nonce_start + 1),
+            Poly::sample_cbd(seed, nonce_start + 2),
+        ];
+        Self::from_polys(polys)
+    }
+
     // --- Arithmetic ---
 
     pub fn add_assign(&mut self, rhs: &Self) {

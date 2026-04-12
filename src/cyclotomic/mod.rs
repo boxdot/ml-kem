@@ -19,6 +19,7 @@
 
 use crate::{
     cyclotomic::base::BASE_ZETAS,
+    hash::shake256,
     integer::{Q, Zq},
 };
 
@@ -39,6 +40,56 @@ impl Poly {
         Self {
             coeffs: [Zq::zero(); 256],
         }
+    }
+
+    /// Sample via CBD(η = 2)
+    ///
+    /// # Mathematical discussion
+    ///
+    /// CBD(η) is the centered binomial distribution with parameter eta, that is, is samples each
+    /// coefficient as
+    ///
+    /// x = Σ(i=0..η) a_i - Σ(i=0..η) b_i,
+    ///
+    /// where a_i, b_i are independent uniform bits.
+    ///
+    /// For η = 2, this is equivalent to sampling each coefficient as
+    ///
+    /// x = (a_0 + a_1) - (b_0 + b_1)   ∈ {-2, -1, 0, 1, 2},
+    ///
+    /// with probabilities
+    ///
+    /// P(0)  = 6/16 = 0.375
+    /// P(±1) = 4/16 = 0.25  each
+    /// P(±2) = 1/16 = 0.0625 each.
+    pub fn sample_cbd(seed: &[u8; 32], nonce: u8) -> Self {
+        // PRF: SHAKE-256(seed || nonce) -> 128 bytes (64η bytes for η=2)
+        let mut prf_input = [0u8; 33];
+        prf_input[0..32].copy_from_slice(seed);
+        prf_input[32] = nonce;
+
+        let mut prf_output = [0u8; 128];
+        shake256(&prf_input, &mut prf_output);
+
+        let mut p = Poly::zero();
+        // Each byte gives 2 coefficients (4 bits each)
+        for i in 0..128 {
+            let byte = prf_output[i];
+
+            let a0 = byte & 1;
+            let a1 = byte >> 1 & 1;
+            let b0 = byte >> 2 & 1;
+            let b1 = byte >> 3 & 1;
+            p.coeffs[2 * i] = Zq::from_int((a0 + a1) as i16 - (b0 + b1) as i16);
+
+            let a0 = byte >> 4 & 1;
+            let a1 = byte >> 5 & 1;
+            let b0 = byte >> 6 & 1;
+            let b1 = byte >> 7 & 1;
+            p.coeffs[2 * i + 1] = Zq::from_int((a0 + a1) as i16 - (b0 + b1) as i16);
+        }
+
+        p
     }
 
     pub fn add_assign(&mut self, rhs: &Self) {
@@ -446,5 +497,88 @@ pub(crate) mod test {
             let err = (orig - recv).abs().min(3329 - (orig - recv).abs());
             err <= bound
         })
+    }
+
+    #[test]
+    fn test_sample_cbd_range() {
+        // All coefficients must be in [-2, 2]
+        let seed = [0u8; 32];
+        let p = Poly::sample_cbd(&seed, 0);
+        for i in 0..256 {
+            // -2 → 3327
+            // -1 → 3328
+            //  0 → 0
+            //  1 → 1
+            //  2 → 2
+            let c = p.coeffs[i].to_int();
+            assert!(
+                c == 0 || c == 1 || c == 2 || c == 3327 || c == 3328,
+                "coeff {i} = {c} out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sample_cbd_different_nonces() {
+        // Different nonces must produce different polynomials
+        let seed = [0u8; 32];
+        let p0 = Poly::sample_cbd(&seed, 0);
+        let p1 = Poly::sample_cbd(&seed, 1);
+        assert_ne!(p0, p1);
+    }
+
+    #[test]
+    fn test_sample_cbd_different_seeds() {
+        // Different seeds must produce different polynomials
+        let seed0 = [0u8; 32];
+        let mut seed1 = [0u8; 32];
+        seed1[0] = 1;
+        let p0 = Poly::sample_cbd(&seed0, 0);
+        let p1 = Poly::sample_cbd(&seed1, 0);
+        assert_ne!(p0, p1);
+    }
+
+    #[test]
+    fn test_sample_cbd_distribution() {
+        // Sample many polynomials and check rough frequency of each value.
+        // Expected probabilities for η=2:
+        // P(0)  = 6/16 = 0.375
+        // P(±1) = 4/16 = 0.25
+        // P(±2) = 1/16 = 0.0625
+        let mut counts = [0i64; 5]; // indices 0..4 for values -2..2
+        let n_polys = 100;
+
+        for i in 0..n_polys {
+            let seed = [i as u8; 32];
+            let p = Poly::sample_cbd(&seed, 0);
+            for j in 0..256 {
+                let c = p.coeffs[j].to_int();
+                let normalized = if c > 3329 / 2 {
+                    c as i32 - 3329
+                } else {
+                    c as i32
+                };
+                counts[(normalized + 2) as usize] += 1;
+            }
+        }
+
+        let total = (n_polys * 256) as f64;
+        let freq: Vec<f64> = counts.iter().map(|&c| c as f64 / total).collect();
+
+        // Check within 5% of expected
+        assert!((freq[2] - 0.375).abs() < 0.05, "P(0)  = {:.3}", freq[2]);
+        assert!((freq[1] - 0.25).abs() < 0.05, "P(-1) = {:.3}", freq[1]);
+        assert!((freq[3] - 0.25).abs() < 0.05, "P(+1) = {:.3}", freq[3]);
+        assert!((freq[0] - 0.0625).abs() < 0.05, "P(-2) = {:.3}", freq[0]);
+        assert!((freq[4] - 0.0625).abs() < 0.05, "P(+2) = {:.3}", freq[4]);
+    }
+
+    #[test]
+    fn test_sample_cbd_deterministic() {
+        // Same seed and nonce must always produce the same polynomial
+        let seed = [42u8; 32];
+        let p0 = Poly::sample_cbd(&seed, 0);
+        let p1 = Poly::sample_cbd(&seed, 0);
+        assert_eq!(p0, p1);
     }
 }
