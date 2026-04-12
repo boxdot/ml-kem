@@ -1,7 +1,10 @@
 //! Kyber Public Key Encryption
 
+use subtle::{Choice, ConstantTimeEq};
+
 use crate::{cyclotomic::Poly, hash::G, matrix::Mat3x3, module::Vec3};
 
+#[derive(Clone)]
 pub struct EncryptionKey {
     t: Vec3,        // Public vector, in NTT domain
     seed: [u8; 32], // Seed to regenerate A on the fly
@@ -12,15 +15,18 @@ pub struct DecryptionKey {
 }
 
 pub struct Ciphertext {
-    c1: [u8; 960], // compressed u with d = 10, 960 bytes
-    c2: [u8; 128], // compressed v with d = 4, 128 bytes
+    pub(crate) c1: [u8; 960], // compressed u with d = 10, 960 bytes
+    pub(crate) c2: [u8; 128], // compressed v with d = 4, 128 bytes
 }
 
 impl EncryptionKey {
     /// Takes a 32-byte seed, return (ek, dk)
     pub fn generate(seed: &[u8; 32]) -> (EncryptionKey, DecryptionKey) {
         // 1. Expand seed into (rho, sigma) via G = SHA3-512
-        let (rho, sigma) = G(seed);
+        let mut g_input = [0u8; 33];
+        g_input[0..32].copy_from_slice(seed);
+        g_input[32] = 3; // ML-KEM-768 parameter k=3
+        let (rho, sigma) = G(&g_input);
 
         // 2. Generate matrix A from rho, stays in NTT domain
         let a = Mat3x3::sample_ntt(&rho);
@@ -38,6 +44,23 @@ impl EncryptionKey {
         t.add_assign(&e);
 
         (EncryptionKey { t, seed: rho }, DecryptionKey { s })
+    }
+
+    /// Encode to bytes
+    pub fn encode(&self, out: &mut [u8; 1184]) {
+        self.t.encode((&mut out[0..1152]).try_into().unwrap());
+        out[1152..1184].copy_from_slice(&self.seed);
+    }
+
+    /// Decode from bytes
+    pub fn decode(bytes: &[u8; 1184]) -> Self {
+        let mut out = Self {
+            t: Vec3::zero(),
+            seed: [0u8; 32],
+        };
+        Vec3::decode(&bytes[0..1152].try_into().unwrap(), &mut out.t);
+        out.seed.copy_from_slice(&bytes[1152..1184]);
+        out
     }
 
     /// m is a 32-byte message, r is 32-byte randomness
@@ -100,6 +123,12 @@ impl DecryptionKey {
         let mut m = [0u8; 32];
         v.compress::<1, 32>(&mut m);
         m
+    }
+}
+
+impl ConstantTimeEq for Ciphertext {
+    fn ct_eq(&self, other: &Self) -> Choice {
+        self.c1.ct_eq(&other.c1) & self.c2.ct_eq(&other.c2)
     }
 }
 
