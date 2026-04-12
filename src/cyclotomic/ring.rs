@@ -149,19 +149,6 @@ impl Poly {
         }
     }
 
-    pub fn pointwise_mul(&self, rhs: &Self) -> Self {
-        let mut res = Poly::zero();
-        for (i, &zeta) in BASE_ZETAS.iter().enumerate() {
-            let a0 = self.coeffs[2 * i];
-            let a1 = self.coeffs[2 * i + 1];
-            let b0 = rhs.coeffs[2 * i];
-            let b1 = rhs.coeffs[2 * i + 1];
-            res.coeffs[2 * i] = a0 * b0 + zeta * a1 * b1;
-            res.coeffs[2 * i + 1] = a0 * b1 + a1 * b0;
-        }
-        res
-    }
-
     pub fn mul_add_assign(&mut self, a: &Self, b: &Self) {
         for (i, &zeta) in BASE_ZETAS.iter().enumerate() {
             let a0 = a.coeffs[2 * i];
@@ -365,7 +352,8 @@ pub(crate) mod test {
         b.ntt();
 
         // 2. Pointwise multiply
-        let mut c = a.pointwise_mul(&b);
+        let mut c = Poly::zero();
+        c.mul_add_assign(&a, &b);
 
         // 3. Move back to coefficient domain
         c.intt();

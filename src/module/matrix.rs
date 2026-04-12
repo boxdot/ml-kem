@@ -268,7 +268,7 @@ mod tests {
         let mut v = Vec3::sample_cbd(&[42u8; 32], 0);
         v.ntt();
 
-        // naive: compute A*v in coefficient domain via pointwise_mul + intt
+        // naive: compute A*v in NTT domain via mul_add_assign
         // for each output row i: res[i] = Σ_j mat[i][j] * v[j]
         let mut expected = Vec3::zero();
         for i in 0..3 {
