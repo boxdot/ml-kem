@@ -1,4 +1,4 @@
-use crate::cyclotomic::Poly;
+use crate::cyclotomic::ring::Poly;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vec3([Poly; 3]);
@@ -108,7 +108,7 @@ mod test {
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
 
-    use crate::{cyclotomic::test::max_error, integer::Zq};
+    use crate::{cyclotomic::ring::test::max_error, integer::Zq};
 
     use super::*;
 

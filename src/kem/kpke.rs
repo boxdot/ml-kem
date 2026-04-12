@@ -2,7 +2,11 @@
 
 use subtle::{Choice, ConstantTimeEq};
 
-use crate::{cyclotomic::Poly, hash::G, matrix::Mat3x3, module::Vec3};
+use crate::{
+    cyclotomic::ring::Poly,
+    hash::G,
+    module::{matrix::Mat3x3, vector::Vec3},
+};
 
 #[derive(Clone)]
 pub struct EncryptionKey {

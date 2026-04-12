@@ -4,9 +4,9 @@ use sha3::{
 };
 
 use crate::{
-    cyclotomic::Poly,
+    cyclotomic::ring::Poly,
     integer::{Q, Zq},
-    module::Vec3,
+    module::vector::Vec3,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
