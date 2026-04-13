@@ -44,6 +44,11 @@ impl EncapsulationKey {
         (encaps_key, decaps_key)
     }
 
+    /// Encode to 1184 bytes per FIPS 203 (same as the inner KPKE encryption key).
+    pub fn encode(&self, out: &mut [u8; 1184]) {
+        self.ek.encode(out);
+    }
+
     /// m is 32 bytes of fresh randomness
     pub fn encaps(&self, m: &[u8; 32]) -> (SharedSecret, Ciphertext) {
         // 1. Derive (K, r) from m
@@ -61,6 +66,14 @@ impl EncapsulationKey {
 }
 
 impl DecapsulationKey {
+    /// Encode to 2400 bytes per FIPS 203: dkPKE (1152) || ek (1184) || H(ek) (32) || z (32)
+    pub fn encode(&self, out: &mut [u8; 2400]) {
+        self.dk.encode((&mut out[0..1152]).try_into().unwrap());
+        self.ek.encode((&mut out[1152..2336]).try_into().unwrap());
+        out[2336..2368].copy_from_slice(&self.ek_hash);
+        out[2368..2400].copy_from_slice(&self.z);
+    }
+
     pub fn decaps(&self, ct: &Ciphertext) -> SharedSecret {
         // 1. Decrypt to recover m'
         let m_prime = self.dk.decrypt(ct);

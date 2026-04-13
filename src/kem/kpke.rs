@@ -106,7 +106,33 @@ impl EncryptionKey {
     }
 }
 
+impl Ciphertext {
+    /// Encode to 1088 bytes: c1 (960) || c2 (128)
+    pub fn to_bytes(&self) -> [u8; 1088] {
+        let mut out = [0u8; 1088];
+        out[0..960].copy_from_slice(&self.c1);
+        out[960..1088].copy_from_slice(&self.c2);
+        out
+    }
+
+    /// Decode from 1088 bytes: c1 (960) || c2 (128)
+    pub fn from_bytes(bytes: &[u8; 1088]) -> Self {
+        let mut c = Ciphertext {
+            c1: [0; 960],
+            c2: [0; 128],
+        };
+        c.c1.copy_from_slice(&bytes[0..960]);
+        c.c2.copy_from_slice(&bytes[960..1088]);
+        c
+    }
+}
+
 impl DecryptionKey {
+    /// Encode the KPKE decryption key (ByteEncode_12 of s in NTT domain).
+    pub fn encode(&self, out: &mut [u8; 1152]) {
+        self.s.encode(out);
+    }
+
     pub fn decrypt(&self, c: &Ciphertext) -> [u8; 32] {
         // 1. Decompress ciphertext u and v
         let mut u = Vec3::zero();
