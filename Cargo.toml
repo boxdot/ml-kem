@@ -11,6 +11,9 @@ subtle = "2.6.1"
 quickcheck = "1.1.0"
 quickcheck_macros = "1.2.0"
 criterion = "0.5"
+ml-kem = "0.3.0-rc.2"
+rand_core = "0.10"
+libcrux-ml-kem = "0.0.8"
 
 [[bench]]
 name = "roundtrip"
